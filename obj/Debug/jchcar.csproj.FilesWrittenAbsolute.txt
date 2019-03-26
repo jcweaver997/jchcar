@@ -1,0 +1,5 @@
+/home/jc/Desktop/git/jchcar/obj/Debug/.NETFramework,Version=v4.6.1.AssemblyAttribute.cs
+/home/jc/Desktop/git/jchcar/bin/Debug/jchcar.exe.mdb
+/home/jc/Desktop/git/jchcar/bin/Debug/jchcar.exe
+/home/jc/Desktop/git/jchcar/obj/Debug/jchcar.exe
+/home/jc/Desktop/git/jchcar/obj/Debug/jchcar.exe.mdb
