@@ -11,20 +11,13 @@ namespace jchcar
         
         public static void Main(string[] args)
         {
-            //CarControl c = new CarControl();
-            //c.Start();
-            WifiCracking wc = new WifiCracking();
-            var wifis = wc.Scan();
-            foreach (var wifi in wifis)
+            CarControl c = new CarControl();
+            new Thread(()=>
             {
-                Console.WriteLine(wifi.BSSID);
-                if (wifi.BSSID.Equals("A0:04:60:A6:B0:0C"))
-                {
-                    Console.WriteLine("found");
-                    wc.CrackWPA2(wifi);
-                }
-            }
-            Console.WriteLine("done");
+                c.Start();
+            }).Start();
+            WifiCracking wc = new WifiCracking();
+            wc.Start();
             
         }   
     }
