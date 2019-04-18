@@ -16,7 +16,8 @@ namespace jchcar
 
         private TcpNetworking net;
         private List<Wifi> wifis;
-        private Thread crackingThread;
+        private Thread runningThread;
+        private Process runningProcess;
         
         public enum WifiSec
         {
@@ -46,7 +47,7 @@ namespace jchcar
         public void OnMessageReceive(string message)
         {
             Console.WriteLine("got message "+message);
-            string[] messageSplit = message.Split();
+            string[] messageSplit = message.Split(' ');
             
             if (message.Equals("scan"))
             {
@@ -58,12 +59,14 @@ namespace jchcar
                     int id = Int32.Parse(messageSplit[1]);
                     if (wifis.Count>id)
                     {
-                        crackingThread?.Abort();
-                        crackingThread = new Thread(() =>
+                        
+                        runningThread?.Abort();
+                        runningProcess?.Kill();
+                        runningThread = new Thread(() =>
                         {
                             CrackWPA2(wifis[id]); 
                         });
-                        crackingThread.Start();
+                        runningThread.Start();
                         
                     }
                     else
@@ -74,7 +77,9 @@ namespace jchcar
                 }
             }else if (message.Equals("stop"))
             {
-                crackingThread?.Abort();
+                runningProcess?.Kill();
+                runningThread?.Abort();
+                
             }
             else if (message.Equals("list"))
             {
@@ -83,6 +88,96 @@ namespace jchcar
                     net.Send("log: "+i+","+wifis[i].BSSID+","+wifis[i].channel+","+(wifis[i].wifiSec==WifiSec.WPA2?"WPA2":"none/other")+","+wifis[i].ESSID+","+wifis[i].password);
                 }
                 net.Send("log: done listing wifis");
+            }
+            else if (message.StartsWith("password"))
+            {
+                if (messageSplit.Length==3)
+                {
+                    int id = Int32.Parse(messageSplit[1]);
+                    wifis[id].password = messageSplit[2];
+                    
+                    net.Send("log: set password as "+messageSplit[2]+" for "+wifis[id].ESSID);
+                }
+
+            }
+            else if (message.StartsWith("connect"))
+            {
+                if (messageSplit.Length==2)
+                {
+                    int id = Int32.Parse(messageSplit[1]);
+                    string intfr = GetInterfaceName();
+                    ManagedMode(intfr);
+                    ConnectWifi(wifis[id],intfr);
+
+                }
+
+            }
+            else if (message.Equals("devices"))
+            {
+                string ip = GetLocalIP(GetInterfaceName());
+                if (ip.Equals(""))
+                {
+                    net.Send("Cannot scan for devices unless connected to a network.");
+                }
+                else
+                {
+                    runningProcess?.Kill();
+                    runningThread?.Abort();
+                    runningThread = new Thread(() =>
+                    {
+                        runningProcess = new Process();
+                        runningProcess.StartInfo.FileName = "/usr/bin/nmap";
+                        runningProcess.StartInfo.Arguments = "-T4 -F "+ip;
+                        runningProcess.StartInfo.RedirectStandardOutput = true;
+                        runningProcess.StartInfo.RedirectStandardError = true;
+                        runningProcess.StartInfo.UseShellExecute = false;
+                        runningProcess.Start();
+                        string standout = "";
+                        string standerr = "";
+                        while (!runningProcess.HasExited)
+                        {
+
+                            if (runningProcess.StandardOutput.Peek() != -1)
+                            {
+                                if (runningProcess.StandardOutput.Peek() == '\n')
+                                {
+                                    net.Send(standout);
+                                    standout = "";
+                                    runningProcess.StandardOutput.Read();
+                                }
+                                else
+                                {
+                                    standout += (char)runningProcess.StandardOutput.Read();
+                                }
+                            }else if (runningProcess.StandardError.Peek() != -1)
+                            {
+                                if (runningProcess.StandardError.Peek() == '\n')
+                                {
+                                    net.Send(standerr);
+                                    standerr = "";
+                                    runningProcess.StandardError.Read();
+                                }
+                                else
+                                {
+                                    standerr += (char)runningProcess.StandardError.Read();
+                                }
+                            }
+                            else
+                            {
+                                Thread.Sleep(100);
+                            }
+ 
+                        }
+                        net.Send(runningProcess.StandardOutput.ReadToEnd());
+                        net.Send(runningProcess.StandardError.ReadToEnd());
+                        net.Send("nmap finished.");
+                        
+
+
+                    });
+                    runningThread.Start();
+                    
+                }
             }
         }
         
@@ -106,7 +201,28 @@ namespace jchcar
         {
             if(intfr.Equals("wlan1mon"))
             RunCommand("/usr/sbin/airmon-ng", "stop "+intfr);
+            RunCommand("/usr/bin/nmcli","dev disconnect ifname "+intfr);
 
+        }
+
+        private string GetLocalIP(string intfr)
+        {
+            string[] lines = GetOutputLines("/bin/bash","-c \"nmcli dev show "+intfr+" | grep IP4.ADDRESS\"",true)[0].Trim().Split(' ');
+            return lines[lines.Length-1];
+        }
+
+        private void ConnectWifi(Wifi w, string intfr)
+        {
+            //nmcli dev wifi con "Capitol Residence Hall" ifname wlx00c0caa5b89c
+            if (w.wifiSec == WifiSec.none)
+            {
+                RunCommand("/usr/bin/nmcli","dev wifi con "+w.ESSID+" ifname "+intfr,true);
+                
+            }else if (w.wifiSec == WifiSec.WPA2)
+            {
+                RunCommand("/usr/bin/nmcli","dev wifi con "+w.ESSID+" ifname "+intfr+" password "+w.password+" hidden yes",true);
+            }
+            net.Send("IP: "+GetLocalIP(intfr));
         }
 
 
@@ -205,7 +321,7 @@ namespace jchcar
 
         }
 
-        public void RunCommand(string file, string arguments)
+        public void RunCommand(string file, string arguments,bool printOutput=false)
         {
             Console.WriteLine("Starting command "+file+" "+arguments);
             net.Send("log: Starting command "+file+" "+arguments);
@@ -217,10 +333,15 @@ namespace jchcar
             p2.StartInfo.RedirectStandardError = true;
             p2.Start();
             p2.WaitForExit();
+            if (printOutput)
+            {
+                net.Send(p2.StandardOutput.ReadToEnd());
+                net.Send(p2.StandardError.ReadToEnd());
+            }
             
         }
 
-        public string[] GetOutputLines(string file, string arguments)
+        public string[] GetOutputLines(string file, string arguments, bool printOutput=false)
         {
             Console.WriteLine("Starting command "+file+" "+arguments);
             net.Send("log: Starting command "+file+" "+arguments);
@@ -232,7 +353,13 @@ namespace jchcar
             p2.StartInfo.UseShellExecute = false;
             p2.Start();
             p2.WaitForExit();
-            return p2.StandardOutput.ReadToEnd().Split('\n');
+            string output = p2.StandardOutput.ReadToEnd();
+            if (printOutput)
+            {
+                net.Send(output);
+                net.Send(p2.StandardError.ReadToEnd());
+            }
+            return output.Split('\n');
         }
 
         public void Deauth(Wifi w, string clientMAC)
@@ -265,24 +392,27 @@ namespace jchcar
                     }
                     else
                     {
-                        pos = s.IndexOf("ESSID:\"", StringComparison.Ordinal);
+                        pos = s.IndexOf("Encryption key:", StringComparison.Ordinal);
                         if (pos>=0)
                         {
-                            current.ESSID = s.Substring(pos+6);
+                            if (s.Substring(pos+15).Equals("on"))
+                            {
+                                current.wifiSec = WifiSec.WPA2;
+                            }
+                            else
+                            {
+                                current.wifiSec = WifiSec.none;
+                            }
+
                         }
+                        
+
                         else
                         {
-                            pos = s.IndexOf("Encryption key:", StringComparison.Ordinal);
+                            pos = s.IndexOf("ESSID:\"", StringComparison.Ordinal);
                             if (pos>=0)
                             {
-                                if (s.Substring(pos+15).Equals("on"))
-                                {
-                                    current.wifiSec = WifiSec.WPA2;
-                                }
-                                else
-                                {
-                                    current.wifiSec = WifiSec.none;
-                                }
+                                current.ESSID = s.Substring(pos+6);
                                 net.Send("wifi: "+wifis.Count+" "+current.channel+" "+current.BSSID+" "+current.ESSID);
                                 wifis.Add(current);
                                 current = new Wifi();
